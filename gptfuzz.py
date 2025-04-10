@@ -1,6 +1,10 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'  # for debugging
 
+from dotenv import load_dotenv
+load_dotenv()
+openai_key = os.getenv("OPENAI_API_KEY")
+hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN")
 from fastchat.model import add_model_args
 import argparse
 import pandas as pd
@@ -22,7 +26,7 @@ httpx_logger.setLevel(logging.WARNING)
 def main(args):
     initial_seed = pd.read_csv(args.seed_path)['text'].tolist()
 
-    openai_model = OpenAILLM(args.model_path, args.openai_key)
+    openai_model = OpenAILLM(args.model_path, openai_key)
     # target_model = PaLM2LLM(args.target_model, args.palm_key)
     # target_model = ClaudeLLM(args.target_model, args.claude_key)
     target_model = LocalVLLM(args.target_model)
