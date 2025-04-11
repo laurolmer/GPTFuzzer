@@ -1,4 +1,6 @@
+from typing import Optional
 import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from openai import OpenAI
 from fastchat.model import load_model, get_conversation_template
 import logging
@@ -329,6 +331,50 @@ class OpenAILLM(LLM):
         return [" " for _ in range(n)]
 
     def generate_batch(self, prompts, temperature=0, max_tokens=512, n=1, max_trials=10, failure_sleep_time=5):
+        results = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = {executor.submit(self.generate, prompt, temperature, max_tokens, n,
+                                       max_trials, failure_sleep_time): prompt for prompt in prompts}
+            for future in concurrent.futures.as_completed(futures):
+                results.extend(future.result())
+        return results
+
+class LocalTransformersLLM(LLM):
+    def __init__(self,
+                model_path,
+                system_message=None):
+        super().__init__()
+
+        self.system_message = system_message if system_message is not None else "You are a helpful assistant."
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
+
+    def generate(self, prompt, temperature=0.1, max_tokens=512, n=1, max_trials=10, failure_sleep_time=5) -> Optional[list[str]]:
+        results: list[str] = []
+
+        for _ in range(n):
+            trial: int = 0  # Intentos totales por llamada.
+            try:
+                inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
+                input_ids = inputs["input_ids"] # Obtencion de los tokens generados por el tokenizer
+
+                outputs = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=True, temperature=temperature)
+
+                cleaned_outputs = outputs[0][input_ids.shape[-1]:]
+                results.append(self.tokenizer.decode(cleaned_outputs, skip_special_tokens=True))
+
+            except Exception as e:
+                trial += 1
+                if trial > max_trials:
+                    logging.error(f"Llama model call failed due to {e}. Max trials reached.")
+                    break
+                logging.warning(f"Llama model call failed due to {e}. Retrying {trial} / {max_trials} times...")
+
+
+
+        return results
+
+    def generate_batch(self, prompts, temperature=0.1, max_tokens=512, n=1, max_trials=10, failure_sleep_time=5):
         results = []
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = {executor.submit(self.generate, prompt, temperature, max_tokens, n,
