@@ -38,18 +38,20 @@ class LocalLLM(LLM):
                  system_message=None
                  ):
         super().__init__()
-
-        self.model, self.tokenizer = self.create_model(
-            model_path,
-            device,
-            num_gpus,
-            max_gpu_memory,
-            dtype,
-            load_8bit,
-            cpu_offloading,
-            revision=revision,
-            debug=debug,
-        )
+        try:
+            self.model, self.tokenizer = self.create_model(
+                model_path,
+                device,
+                num_gpus,
+                max_gpu_memory,
+                dtype,
+                load_8bit,
+                cpu_offloading,
+                revision=revision,
+                debug=debug,
+            )
+        except Exception as e:
+            logging.error(e)
         self.model_path = model_path
 
         if system_message is None and 'Llama-2' in model_path:
@@ -91,7 +93,10 @@ class LocalLLM(LLM):
             conv_temp.set_system_message(self.system_message)
 
     @torch.inference_mode()
-    def generate(self, prompt, temperature=0.01, max_tokens=512, repetition_penalty=1.0):
+    def generate(self, prompt, temperature=0.01, max_tokens=512, repetition_penalty=1.0, n=1, top_k=20, top_p=0.9):
+        do_sample = n > 1
+
+        logging.debug("Creando conversacion")
         conv_temp = get_conversation_template(self.model_path)
         self.set_system_message(conv_temp)
 
@@ -99,23 +104,40 @@ class LocalLLM(LLM):
         conv_temp.append_message(conv_temp.roles[1], None)
 
         prompt_input = conv_temp.get_prompt()
-        input_ids = self.tokenizer([prompt_input]).input_ids
-        output_ids = self.model.generate(
-            torch.as_tensor(input_ids).cuda(),
-            do_sample=False,
-            temperature=temperature,
-            repetition_penalty=repetition_penalty,
-            max_new_tokens=max_tokens
-        )
 
-        if self.model.config.is_encoder_decoder:
-            output_ids = output_ids[0]
-        else:
-            output_ids = output_ids[0][len(input_ids[0]):]
+        logging.debug(f"Conversacion creada. Prompt resultante: {prompt_input}")
+        input_ids = self.tokenizer([prompt_input])
 
-        return self.tokenizer.decode(
-            output_ids, skip_special_tokens=True, spaces_between_special_tokens=False
-        )
+        # Generacion de tensores -> mascara de atencion como el input
+        attention_mask = torch.as_tensor(input_ids['attention_mask']).cuda()
+        input_prompt = torch.as_tensor(input_ids.input_ids).cuda()
+
+        logging.debug(f"Tensores inicializados, inicio de generación de resultados. N = {n}")
+        results: list[str] = []
+        for _ in range(n):
+            output_ids = self.model.generate(
+                input_prompt,
+                attention_mask=attention_mask,
+                do_sample=do_sample,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                max_new_tokens=max_tokens
+            )
+
+            cleaned_outputs: str
+            if self.model.config.is_encoder_decoder:
+                cleaned_outputs = output_ids[0]
+            else:
+                cleaned_outputs = output_ids[0][len(input_ids['input_ids'][0]):]
+
+            results.append(self.tokenizer.decode(cleaned_outputs, skip_special_tokens=True, spaces_between_special_tokens=False))
+            logging.debug(f"Resultado {n} generado.")
+
+        logging.info("Respuestas generadas")
+        return results
+
 
     @torch.inference_mode()
     def generate_batch(self, prompts, temperature=0.01, max_tokens=512, repetition_penalty=1.0, batch_size=16):
@@ -346,31 +368,33 @@ class LocalTransformersLLM(LLM):
         super().__init__()
 
         self.system_message = system_message if system_message is not None else "You are a helpful assistant."
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-        self.model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
+        self.tokenizer, self.model = self.create_model(model_path)
 
+    @torch.inference_mode()
+    def create_model(self, model_path: str):
+        return AutoTokenizer.from_pretrained(model_path), AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
+
+    @torch.inference_mode()
     def generate(self, prompt, temperature=0.1, max_tokens=512, n=1, max_trials=10, failure_sleep_time=5) -> Optional[list[str]]:
         results: list[str] = []
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
+        input_ids = inputs["input_ids"]  # Obtencion de los tokens generados por el tokenizer
 
         for _ in range(n):
             trial: int = 0  # Intentos totales por llamada.
             try:
-                inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
-                input_ids = inputs["input_ids"] # Obtencion de los tokens generados por el tokenizer
-
                 outputs = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=True, temperature=temperature)
-
                 cleaned_outputs = outputs[0][input_ids.shape[-1]:]
+
                 results.append(self.tokenizer.decode(cleaned_outputs, skip_special_tokens=True))
 
             except Exception as e:
                 trial += 1
                 if trial > max_trials:
-                    logging.error(f"Llama model call failed due to {e}. Max trials reached.")
+                    logging.error(f"Model call failed due to {e}. Max trials reached.")
                     break
-                logging.warning(f"Llama model call failed due to {e}. Retrying {trial} / {max_trials} times...")
-
-
+                logging.warning(f"Model call failed due to {e}. Retrying {trial} / {max_trials} times...")
 
         return results
 
@@ -381,4 +405,5 @@ class LocalTransformersLLM(LLM):
                                        max_trials, failure_sleep_time): prompt for prompt in prompts}
             for future in concurrent.futures.as_completed(futures):
                 results.extend(future.result())
+
         return results
