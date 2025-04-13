@@ -5,7 +5,7 @@ import csv
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .mutator import Mutator, MutatePolicy
+    from gptfuzzer.fuzzer.Mutators.imutator import Mutator, MutatePolicy
     from .selection import SelectPolicy
 
 from gptfuzzer.llm import LLM, LocalLLM

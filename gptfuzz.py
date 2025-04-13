@@ -1,19 +1,18 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'  # for debugging
 
-from dotenv import load_dotenv
-load_dotenv()
-openai_key = os.getenv("OPENAI_API_KEY")
-hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN")
+import config
 from fastchat.model import add_model_args
 import argparse
 import pandas as pd
 from gptfuzzer.fuzzer.selection import MCTSExploreSelectPolicy
-from gptfuzzer.fuzzer.mutator import (
-    MutateRandomSinglePolicy, OpenAIMutatorCrossOver, OpenAIMutatorExpand,
+from gptfuzzer.fuzzer.Mutators.policies import MutateRandomSinglePolicy
+from gptfuzzer.fuzzer.Mutators.openai_mutators import (
+    OpenAIMutatorCrossOver, OpenAIMutatorExpand,
     OpenAIMutatorGenerateSimilar, OpenAIMutatorRephrase, OpenAIMutatorShorten)
+from gptfuzzer.fuzzer.Mutators.local_mutators import LocalMutatorCrossOver, LocalMutatorExpand, LocalMutatorShorten, LocalMutatorGenerateSimilar, LocalMutatorRephrase
 from gptfuzzer.fuzzer import GPTFuzzer
-from gptfuzzer.llm import OpenAILLM, LocalVLLM, LocalLLM, PaLM2LLM, ClaudeLLM
+from gptfuzzer.llm import OpenAILLM, LocalVLLM, LocalLLM
 from gptfuzzer.utils.predict import RoBERTaPredictor
 import random
 random.seed(100)
@@ -23,14 +22,44 @@ httpx_logger: logging.Logger = logging.getLogger("httpx")
 httpx_logger.setLevel(logging.WARNING)
 
 
+def local_policy(model_path, temperature):
+    return MutateRandomSinglePolicy([
+        LocalMutatorCrossOver(model_path, temperature),
+        LocalMutatorExpand(model_path, temperature),
+        LocalMutatorGenerateSimilar(model_path, temperature),
+        LocalMutatorRephrase(model_path, temperature),
+        LocalMutatorShorten(model_path, temperature)],
+        concatentate=True)
+
+# for reproduction only, if you want better performance, use temperature>0
+def openai_policy(model_path, temperature):
+    return MutateRandomSinglePolicy([
+        OpenAIMutatorCrossOver(model_path, temperature),
+        OpenAIMutatorExpand(model_path, temperature),
+        OpenAIMutatorGenerateSimilar(model_path, temperature),
+        OpenAIMutatorRephrase(model_path, temperature),
+        OpenAIMutatorShorten(model_path, temperature)],
+        concatentate=True)
+
 def main(args):
+    #openai_key = config.OPENAI_API_KEY
+    hf_token = config.HUGGINGFACE_HUB_TOKEN
     initial_seed = pd.read_csv(args.seed_path)['text'].tolist()
 
-    openai_model = OpenAILLM(args.model_path, openai_key)
+    model_path: str = args.model_path
+
+    policy: MutateRandomSinglePolicy
+    if model_path.startswith("gpt"):
+        openai_model = OpenAILLM(args.model_path, openai_key)
+        policy = openai_policy(model_path, 0.0)
+    else:
+        local_model = LocalLLM(args.model_path)
+        policy = local_policy(model_path, 0.01)
+
     # target_model = PaLM2LLM(args.target_model, args.palm_key)
     # target_model = ClaudeLLM(args.target_model, args.claude_key)
-    target_model = LocalVLLM(args.target_model)
-    # target_model = LocalLLM(args.target_model) # we suggest using LocalVLLM for better performance, however if you are facing difficulties in installing vllm, you can use LocalLLM instead
+    # target_model = LocalVLLM(args.target_model)
+    target_model = LocalLLM(args.target_model) # we suggest using LocalVLLM for better performance, however if you are facing difficulties in installing vllm, you can use LocalLLM instead
     roberta_model = RoBERTaPredictor('hubert233/GPTFuzz', device='cuda:1')
 
     questions = [
@@ -44,14 +73,7 @@ def main(args):
         target=target_model,
         predictor=roberta_model,
         initial_seed=initial_seed,
-        mutate_policy=MutateRandomSinglePolicy([
-            OpenAIMutatorCrossOver(openai_model, temperature=0.0),  # for reproduction only, if you want better performance, use temperature>0
-            OpenAIMutatorExpand(openai_model, temperature=0.0),
-            OpenAIMutatorGenerateSimilar(openai_model, temperature=0.0),
-            OpenAIMutatorRephrase(openai_model, temperature=0.0),
-            OpenAIMutatorShorten(openai_model, temperature=0.0)],
-            concatentate=True,
-        ),
+        mutate_policy=policy,
         select_policy=MCTSExploreSelectPolicy(),
         energy=args.energy,
         max_jailbreak=args.max_jailbreak,
@@ -67,7 +89,7 @@ if __name__ == "__main__":
     parser.add_argument('--openai_key', type=str, default='', help='OpenAI API Key')
     parser.add_argument('--claude_key', type=str, default='', help='Claude API Key')
     parser.add_argument('--palm_key', type=str, default='', help='PaLM2 api key')
-    parser.add_argument('--model_path', type=str, default='gpt-3.5-turbo',
+    parser.add_argument('--model_path', type=str, default='meta-llama/Llama-3.2-1B-Instruct', # ALT gpt-3.5-turbo
                         help='mutate model path')
     parser.add_argument('--target_model', type=str, default='meta-llama/Llama-2-7b-chat-hf',
                         help='The target model, openai model or open-sourced LLMs')
