@@ -141,6 +141,9 @@ class LocalLLM(LLM):
 
     @torch.inference_mode()
     def generate_batch(self, prompts, temperature=0.01, max_tokens=512, repetition_penalty=1.0, batch_size=16):
+        if not prompts:
+            return []
+
         prompt_inputs = []
         for prompt in prompts:
             conv_temp = get_conversation_template(self.model_path)
@@ -156,7 +159,6 @@ class LocalLLM(LLM):
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
         input_ids = self.tokenizer(prompt_inputs, padding=True).input_ids
-        # load the input_ids batch by batch to avoid OOM
         outputs = []
         for i in range(0, len(input_ids), batch_size):
             output_ids = self.model.generate(
@@ -226,6 +228,7 @@ class BardLLM(LLM):
     def generate(self, prompt):
         return
 
+
 class PaLM2LLM(LLM):
     def __init__(self,
                  model_path='chat-bison-001',
@@ -272,6 +275,7 @@ class PaLM2LLM(LLM):
                 results.extend(future.result())
         return results
 
+
 class ClaudeLLM(LLM):
     def __init__(self,
                  model_path='claude-instant-1.2',
@@ -313,6 +317,7 @@ class ClaudeLLM(LLM):
             for future in concurrent.futures.as_completed(futures):
                 results.extend(future.result())
         return results
+
 
 class OpenAILLM(LLM):
     def __init__(self,
@@ -361,6 +366,7 @@ class OpenAILLM(LLM):
                 results.extend(future.result())
         return results
 
+
 class LocalTransformersLLM(LLM):
     def __init__(self,
                 model_path,
@@ -378,15 +384,15 @@ class LocalTransformersLLM(LLM):
     def generate(self, prompt, temperature=0.1, max_tokens=512, n=1, max_trials=10, failure_sleep_time=5) -> Optional[list[str]]:
         results: list[str] = []
 
-        inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
-        input_ids = inputs["input_ids"]  # Obtencion de los tokens generados por el tokenizer
+        full_prompt = f"{self.system_message}\n\nUser: {prompt}\nAssistant:"
+        inputs = self.tokenizer(full_prompt, return_tensors="pt").to("cuda")
+        input_ids = inputs["input_ids"]
 
         for _ in range(n):
-            trial: int = 0  # Intentos totales por llamada.
+            trial: int = 0
             try:
                 outputs = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=True, temperature=temperature)
                 cleaned_outputs = outputs[0][input_ids.shape[-1]:]
-
                 results.append(self.tokenizer.decode(cleaned_outputs, skip_special_tokens=True))
 
             except Exception as e:
@@ -401,8 +407,12 @@ class LocalTransformersLLM(LLM):
     def generate_batch(self, prompts, temperature=0.1, max_tokens=512, n=1, max_trials=10, failure_sleep_time=5):
         results = []
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = {executor.submit(self.generate, prompt, temperature, max_tokens, n,
-                                       max_trials, failure_sleep_time): prompt for prompt in prompts}
+            processed_prompts = [
+                f"{self.system_message}\n\nUser: {prompt}\nAssistant:" for prompt in prompts
+            ]
+            futures = { executor.submit(self.generate, processed_prompt, temperature, max_tokens, n,
+                                       max_trials, failure_sleep_time):
+                            prompt for prompt, processed_prompt in zip(prompts, processed_prompts)}
             for future in concurrent.futures.as_completed(futures):
                 results.extend(future.result())
 
