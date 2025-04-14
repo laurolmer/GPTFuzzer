@@ -92,15 +92,14 @@ class LocalLLM(LLM):
     def generate(self, prompt, temperature=0.01, max_tokens=512, repetition_penalty=1.0):
         conv_temp = get_conversation_template(self.model_path)
         self.set_system_message(conv_temp)
-
         conv_temp.append_message(conv_temp.roles[0], prompt)
         conv_temp.append_message(conv_temp.roles[1], None)
-
         prompt_input = conv_temp.get_prompt()
         input_ids = self.tokenizer([prompt_input]).input_ids
+
         output_ids = self.model.generate(
             torch.as_tensor(input_ids).cuda(),
-            do_sample=False,
+            do_sample=True,
             temperature=temperature,
             repetition_penalty=repetition_penalty,
             max_new_tokens=max_tokens
@@ -137,7 +136,7 @@ class LocalLLM(LLM):
         for i in range(0, len(input_ids), batch_size):
             output_ids = self.model.generate(
                 torch.as_tensor(input_ids[i:i+batch_size]).cuda(),
-                do_sample=False,
+                do_sample=True,
                 temperature=temperature,
                 repetition_penalty=repetition_penalty,
                 max_new_tokens=max_tokens,

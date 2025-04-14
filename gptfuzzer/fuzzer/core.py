@@ -13,7 +13,6 @@ from gptfuzzer.utils.template import synthesis_message
 from gptfuzzer.utils.predict import Predictor
 import warnings
 
-
 class PromptNode:
     def __init__(self,
                  fuzzer: 'GPTFuzzer',
@@ -32,7 +31,6 @@ class PromptNode:
         self.mutator: 'Mutator' = mutator
         self.child: 'list[PromptNode]' = []
         self.level: int = 0 if parent is None else parent.level + 1
-
         self._index: int = None
 
     @property
@@ -88,17 +86,14 @@ class GPTFuzzer:
 
         self.mutate_policy = mutate_policy
         self.select_policy = select_policy
-
         self.current_query: int = 0
         self.current_jailbreak: int = 0
         self.current_reject: int = 0
         self.current_iteration: int = 0
-
         self.max_query: int = max_query
         self.max_jailbreak: int = max_jailbreak
         self.max_reject: int = max_reject
         self.max_iteration: int = max_iteration
-
         self.energy: int = energy
         if result_file is None:
             result_file = f'results-{time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())}.csv'

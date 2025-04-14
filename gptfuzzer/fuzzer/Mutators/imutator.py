@@ -23,6 +23,7 @@ class Mutator(ABC):
         self._fuzzer = gptfuzzer
         self.n = gptfuzzer.energy
 
+
 class MutatePolicy(ABC):
 
     def __init__(self, mutators: 'list[Mutator]', fuzzer: 'GPTFuzzer' = None):
