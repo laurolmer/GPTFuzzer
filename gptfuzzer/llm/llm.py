@@ -52,7 +52,9 @@ class LocalLLM(LLM):
             )
         except Exception as e:
             logging.error(e)
+
         self.model_path = model_path
+        self.device = device
 
         if system_message is None and 'Llama-2' in model_path:
             # monkey patch for latest FastChat to use llama2's official system message
@@ -66,7 +68,7 @@ class LocalLLM(LLM):
 
     @torch.inference_mode()
     def create_model(self, model_path,
-                     device='cuda',
+                     device="cuda",
                      num_gpus=1,
                      max_gpu_memory=None,
                      dtype=torch.float16,
@@ -117,8 +119,8 @@ class LocalLLM(LLM):
         input_ids = self.tokenizer([prompt_input])
 
         # Generacion de tensores -> mascara de atencion como el input
-        attention_mask = torch.as_tensor(input_ids['attention_mask']).cuda()
-        input_prompt = torch.as_tensor(input_ids.input_ids).cuda()
+        attention_mask = torch.as_tensor(input_ids['attention_mask']).to(self.device)
+        input_prompt = torch.as_tensor(input_ids.input_ids).to(self.device)
 
         logging.debug(f"Tensores inicializados, inicio de generación de resultados. N = {n}")
         results: list[str] = []
