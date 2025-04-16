@@ -1,12 +1,13 @@
+from typing import Union
 from gptfuzzer.fuzzer.core import GPTFuzzer
 from gptfuzzer.fuzzer.Mutators.imutator import Mutator
 from gptfuzzer.utils.template_functions import shorten, expand, rephrase, cross_over, generate_similar
-from gptfuzzer.llm import LocalLLM
+from gptfuzzer.llm import LocalLLM, OllamaLLM
 
 
 class LocalMutatorBase(Mutator):
     def __init__(self,
-                 model: 'LocalLLM',
+                 model: Union[LocalLLM, OllamaLLM],
                  temperature: int = 1,
                  max_tokens: int = 512,
                  fuzzer: 'GPTFuzzer' = None):
@@ -22,7 +23,7 @@ class LocalMutatorBase(Mutator):
 
 class LocalMutatorGenerateSimilar(LocalMutatorBase):
     def __init__(self,
-                 model: 'LocalLLM',
+                 model: Union[LocalLLM, OllamaLLM],
                  temperature: int = 1,
                  max_tokens: int = 512,
                  fuzzer: 'GPTFuzzer' = None):
@@ -33,7 +34,7 @@ class LocalMutatorGenerateSimilar(LocalMutatorBase):
 
 class LocalMutatorCrossOver(LocalMutatorBase):
     def __init__(self,
-                 model: 'LocalLLM',
+                 model: Union[LocalLLM, OllamaLLM],
                  temperature: int = 1,
                  max_tokens: int = 512,
                  fuzzer: 'GPTFuzzer' = None):
@@ -44,7 +45,7 @@ class LocalMutatorCrossOver(LocalMutatorBase):
 
 class LocalMutatorExpand(LocalMutatorBase):
     def __init__(self,
-                 model: 'LocalLLM',
+                 model: Union[LocalLLM, OllamaLLM],
                  temperature: int = 1,
                  max_tokens: int = 512,
                  fuzzer: 'GPTFuzzer' = None):
@@ -55,7 +56,7 @@ class LocalMutatorExpand(LocalMutatorBase):
 
 class LocalMutatorShorten(LocalMutatorBase):
     def __init__(self,
-                 model: 'LocalLLM',
+                 model: Union[LocalLLM, OllamaLLM],
                  temperature: int = 1,
                  max_tokens: int = 512,
                  fuzzer: 'GPTFuzzer' = None):
@@ -66,7 +67,7 @@ class LocalMutatorShorten(LocalMutatorBase):
 
 class LocalMutatorRephrase(LocalMutatorBase):
     def __init__(self,
-                 model: 'LocalLLM',
+                 model: Union[LocalLLM, OllamaLLM],
                  temperature: int = 1,
                  max_tokens: int = 512,
                  fuzzer: 'GPTFuzzer' = None):
