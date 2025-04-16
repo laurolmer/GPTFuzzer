@@ -1,4 +1,6 @@
+from typing import Optional
 import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from openai import OpenAI
 from fastchat.model import load_model, get_conversation_template
 import logging
@@ -36,18 +38,20 @@ class LocalLLM(LLM):
                  system_message=None
                  ):
         super().__init__()
-
-        self.model, self.tokenizer = self.create_model(
-            model_path,
-            device,
-            num_gpus,
-            max_gpu_memory,
-            dtype,
-            load_8bit,
-            cpu_offloading,
-            revision=revision,
-            debug=debug,
-        )
+        try:
+            self.model, self.tokenizer = self.create_model(
+                model_path,
+                device,
+                num_gpus,
+                max_gpu_memory,
+                dtype,
+                load_8bit,
+                cpu_offloading,
+                revision=revision,
+                debug=debug,
+            )
+        except Exception as e:
+            logging.error(e)
         self.model_path = model_path
 
         if system_message is None and 'Llama-2' in model_path:
@@ -89,12 +93,16 @@ class LocalLLM(LLM):
             conv_temp.set_system_message(self.system_message)
 
     @torch.inference_mode()
-    def generate(self, prompt, temperature=0.01, max_tokens=512, repetition_penalty=1.0):
+    def generate(self, prompt, temperature=0.01, max_tokens=512, repetition_penalty=1.0, n=1, top_k=20, top_p=0.9):
+        do_sample = n > 1
+
+        logging.debug("Creando conversacion")
         conv_temp = get_conversation_template(self.model_path)
         self.set_system_message(conv_temp)
         conv_temp.append_message(conv_temp.roles[0], prompt)
         conv_temp.append_message(conv_temp.roles[1], None)
         prompt_input = conv_temp.get_prompt()
+        
         input_ids = self.tokenizer([prompt_input]).input_ids
 
         output_ids = self.model.generate(
@@ -105,17 +113,45 @@ class LocalLLM(LLM):
             max_new_tokens=max_tokens
         )
 
-        if self.model.config.is_encoder_decoder:
-            output_ids = output_ids[0]
-        else:
-            output_ids = output_ids[0][len(input_ids[0]):]
+        logging.debug(f"Conversacion creada. Prompt resultante: {prompt_input}")
+        input_ids = self.tokenizer([prompt_input])
 
-        return self.tokenizer.decode(
-            output_ids, skip_special_tokens=True, spaces_between_special_tokens=False
-        )
+        # Generacion de tensores -> mascara de atencion como el input
+        attention_mask = torch.as_tensor(input_ids['attention_mask']).cuda()
+        input_prompt = torch.as_tensor(input_ids.input_ids).cuda()
+
+        logging.debug(f"Tensores inicializados, inicio de generación de resultados. N = {n}")
+        results: list[str] = []
+        for _ in range(n):
+            output_ids = self.model.generate(
+                input_prompt,
+                attention_mask=attention_mask,
+                do_sample=do_sample,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                max_new_tokens=max_tokens
+            )
+
+            cleaned_outputs: str
+            if self.model.config.is_encoder_decoder:
+                cleaned_outputs = output_ids[0]
+            else:
+                cleaned_outputs = output_ids[0][len(input_ids['input_ids'][0]):]
+
+            results.append(self.tokenizer.decode(cleaned_outputs, skip_special_tokens=True, spaces_between_special_tokens=False))
+            logging.debug(f"Resultado {n} generado.")
+
+        logging.info("Respuestas generadas")
+        return results
+
 
     @torch.inference_mode()
     def generate_batch(self, prompts, temperature=0.01, max_tokens=512, repetition_penalty=1.0, batch_size=16):
+        if not prompts:
+            return []
+
         prompt_inputs = []
         for prompt in prompts:
             conv_temp = get_conversation_template(self.model_path)
@@ -131,7 +167,6 @@ class LocalLLM(LLM):
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = "left"
         input_ids = self.tokenizer(prompt_inputs, padding=True).input_ids
-        # load the input_ids batch by batch to avoid OOM
         outputs = []
         for i in range(0, len(input_ids), batch_size):
             output_ids = self.model.generate(
@@ -201,6 +236,7 @@ class BardLLM(LLM):
     def generate(self, prompt):
         return
 
+
 class PaLM2LLM(LLM):
     def __init__(self,
                  model_path='chat-bison-001',
@@ -247,6 +283,7 @@ class PaLM2LLM(LLM):
                 results.extend(future.result())
         return results
 
+
 class ClaudeLLM(LLM):
     def __init__(self,
                  model_path='claude-instant-1.2',
@@ -288,6 +325,7 @@ class ClaudeLLM(LLM):
             for future in concurrent.futures.as_completed(futures):
                 results.extend(future.result())
         return results
+
 
 class OpenAILLM(LLM):
     def __init__(self,
@@ -334,4 +372,56 @@ class OpenAILLM(LLM):
                                        max_trials, failure_sleep_time): prompt for prompt in prompts}
             for future in concurrent.futures.as_completed(futures):
                 results.extend(future.result())
+        return results
+
+
+class LocalTransformersLLM(LLM):
+    def __init__(self,
+                model_path,
+                system_message=None):
+        super().__init__()
+
+        self.system_message = system_message if system_message is not None else "You are a helpful assistant."
+        self.tokenizer, self.model = self.create_model(model_path)
+
+    @torch.inference_mode()
+    def create_model(self, model_path: str):
+        return AutoTokenizer.from_pretrained(model_path), AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
+
+    @torch.inference_mode()
+    def generate(self, prompt, temperature=0.1, max_tokens=512, n=1, max_trials=10, failure_sleep_time=5) -> Optional[list[str]]:
+        results: list[str] = []
+
+        full_prompt = f"{self.system_message}\n\nUser: {prompt}\nAssistant:"
+        inputs = self.tokenizer(full_prompt, return_tensors="pt").to("cuda")
+        input_ids = inputs["input_ids"]
+
+        for _ in range(n):
+            trial: int = 0
+            try:
+                outputs = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=True, temperature=temperature)
+                cleaned_outputs = outputs[0][input_ids.shape[-1]:]
+                results.append(self.tokenizer.decode(cleaned_outputs, skip_special_tokens=True))
+
+            except Exception as e:
+                trial += 1
+                if trial > max_trials:
+                    logging.error(f"Model call failed due to {e}. Max trials reached.")
+                    break
+                logging.warning(f"Model call failed due to {e}. Retrying {trial} / {max_trials} times...")
+
+        return results
+
+    def generate_batch(self, prompts, temperature=0.1, max_tokens=512, n=1, max_trials=10, failure_sleep_time=5):
+        results = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            processed_prompts = [
+                f"{self.system_message}\n\nUser: {prompt}\nAssistant:" for prompt in prompts
+            ]
+            futures = { executor.submit(self.generate, processed_prompt, temperature, max_tokens, n,
+                                       max_trials, failure_sleep_time):
+                            prompt for prompt, processed_prompt in zip(prompts, processed_prompts)}
+            for future in concurrent.futures.as_completed(futures):
+                results.extend(future.result())
+
         return results
