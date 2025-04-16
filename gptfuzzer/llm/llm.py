@@ -101,11 +101,19 @@ class LocalLLM(LLM):
         logging.debug("Creando conversacion")
         conv_temp = get_conversation_template(self.model_path)
         self.set_system_message(conv_temp)
-
         conv_temp.append_message(conv_temp.roles[0], prompt)
         conv_temp.append_message(conv_temp.roles[1], None)
-
         prompt_input = conv_temp.get_prompt()
+        
+        input_ids = self.tokenizer([prompt_input]).input_ids
+
+        output_ids = self.model.generate(
+            torch.as_tensor(input_ids).cuda(),
+            do_sample=False,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            max_new_tokens=max_tokens
+        )
 
         logging.debug(f"Conversacion creada. Prompt resultante: {prompt_input}")
         input_ids = self.tokenizer([prompt_input])
