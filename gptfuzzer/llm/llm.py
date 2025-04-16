@@ -371,14 +371,6 @@ class OllamaLLM(LLM):
         self.model_path = model_path
         self.system_message = system_message if system_message is not None else "You are a helpful assistant."
 
-    def build_prompt(self, user_input: str) -> str:
-        return (
-            "<|start_of_instruct|>\n"
-            f"System: {self.system_message}\n"
-            f"User: {user_input}\n"
-            "Assistant:"
-        )
-
     def generate(self, prompt, temperature=0, max_tokens=512, n=1):
         conversation = [
             {"role": "system", "content": self.system_message},
